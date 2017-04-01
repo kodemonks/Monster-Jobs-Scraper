@@ -4,6 +4,7 @@ import random
 from MySqlDB import  MySqlDBFetcher
 import logging
 import sys
+import uuid
 from random import randint
 
 
@@ -23,7 +24,7 @@ logging.basicConfig(filename='MonsterJobs.log',level=logging.DEBUG)
 
 
 #Change here for number of records to scrape in a go
-RECORDS_TO_SCRAPE=6
+RECORDS_TO_SCRAPE=22
 
 # Delay In Number Of Seconds To Use To Slow Down The Script
 time_delay = 2
@@ -34,7 +35,7 @@ implicit_wait_time = 6
 #PhantomJS driver used globally across all functions
 driver = None
 db=None
-
+urlHistory=None
 
 #All scraped data will be stored in this variable till
 #verified and parsed properly
@@ -71,15 +72,13 @@ uaList=[
 
 
 #
-#Clean some strings - remove encodings - filter spl char
+# Clean some strings - remove encodings - filter spl char
 # remove few encoding and as parsed data is single line so -
 # make it more readable
 #
 def cleanLine(inputLine):
     print('inside encode')
     if inputLine is not None:
-        inputLine = inputLine.replace("\t","\n")
-        inputLine = inputLine.replace("\t", "\r")
         inputLine = inputLine.replace(".",". \n")
         inputLine = inputLine.replace(".",". \r")
         print('done basic replacement now enco-deco')
@@ -97,14 +96,20 @@ def getOrCreateDriver():
         webdriver.DesiredCapabilities.PHANTOMJS['phantomjs.page.customHeaders.{}'.format(key)] = value
     webdriver.DesiredCapabilities.PHANTOMJS[
         'phantomjs.page.settings.userAgent'] = random.choice(uaList)
-    driver = driver or webdriver.PhantomJS()
-    print(driver.capabilities)
-    driver.set_window_size(1120, 550)
-    driver.implicitly_wait(implicit_wait_time)
-    driver.set_page_load_timeout(120)#Incase something goes wrong timeout driver
-    return driver
+    if driver is not None:
+        return driver
+    else:
+        driver = webdriver.PhantomJS()
+        print(driver.capabilities)
+        driver.set_window_size(1120, 550)
+        driver.implicitly_wait(implicit_wait_time)
+        driver.set_page_load_timeout(120)#Incase something goes wrong timeout driver
+        return driver
 
 
+
+
+# URL mpdifier/fetcher methids
 
 #
 #  Function to create search URL for given
@@ -123,6 +128,28 @@ def getAbsoluteNextPageLink(keyword,relativeLink):
     keyword.replace(" ", "-")
     return "https://www.monster.ca/jobs/search/" + keyword + "_5"+relativeLink
 
+#
+#Fetch Link for next page from history URL
+#
+def getNextAbsoluteUrl(oldUrl):
+    print('Trying this now')
+    print(oldUrl)
+    urlFormer=oldUrl.split('=')
+    try:
+        urlFormer = [str(x) for x in urlFormer]
+        print(len(urlFormer))
+        page=urlFormer[len(urlFormer)-1]
+        urlFormer.pop(len(urlFormer)-1)
+        print(page)
+        page=int(page)+1
+        next_page=""
+        for url in urlFormer:
+            next_page=next_page+url+"="
+        return next_page+str(page)
+    except Exception as e:
+        print('URL error'+str(e))
+        return urlHistory
+
 
 
 #
@@ -137,30 +164,51 @@ def saveToTextFile(jobDescription,fileName):
 
 
 
+#
+# Filter scraped data and removed bad packets
+# any future unhandled DOM's will be treated as bad
+#
+def filterInputData(inputDataList):
+    length = len(inputDataList)
+    i=0
+    while(i<=length-1):
+        if(len(inputDataList[i])!=6):
+            inputDataList.pop(i)
+            length=length-1
+        else:
+            i=i+1
+    return  inputDataList
+
+
+
 
 #
-# Check DB-schema for given details using MySQLDb class
+# Check DB_schema.sql for given details using MySQLDb class
 # details for given Timestamp
 #
 
 def checkDbforDetails(title,company,location,timestamp):
-    location=location.replace('\n','')
-    sql = "SELECT * FROM jobs_raw where JOB_TITLE = '"+title+"' AND COMPANY_NAME = '"+company+"' AND LOCATION = '"+location+"'"
-    cur = db.fetchDBdetailsforTimeStamp(sql)
-    numrows = int(cur.rowcount)
-    print('DB-schema check done records - ' + str(numrows))
-    if (numrows > 0):
-        return True
-    else:
-        return False
+    try:
+        location=location.replace('\n','')
+        sql = "SELECT * FROM jobs_raw where JOB_TITLE = '"+title+"' AND COMPANY_NAME = '"+company+"' AND LOCATION = '"+location+"'"
+        cur = db.fetchDBdetailsforTimeStamp(sql)
+        numrows = int(cur.rowcount)
+        print('DB_schema.sql check done records - ' + str(numrows))
+        if (numrows > 0):
+            return True
+        else:
+            return False
+    except Exception as e:
+        print(sql)
+        print(e)
 
 
 #
 # Scrape until RECORDS_TO_SCRAPE criteria is fulfilled
 #
-def searchForEnoughJobs(keyword,days):
-    global driver,jobDetailList,RECORDS_TO_SCRAPE
-    url=fetchUrl(keyword,days)
+def searchForEnoughJobs(url,recordsScraped):
+    global driver,jobDetailList,RECORDS_TO_SCRAPE,urlHistory
+
     print('(Waiting for DOM to build) Got Search page - '+str(url))
     try:
         driver.get(url)
@@ -168,9 +216,7 @@ def searchForEnoughJobs(keyword,days):
         print(e)
         driver=getOrCreateDriver()
         driver.get(url)
-
     print('Got the page!!')
-    recordsScraped=0
     try:
         while recordsScraped<RECORDS_TO_SCRAPE:
 # Creating Soup element as it will be faster to parse / Phantomjs has rendered complete DOM
@@ -217,35 +263,38 @@ def searchForEnoughJobs(keyword,days):
                     if(recordsScraped>=RECORDS_TO_SCRAPE):
                         break;
 
-                    print("records scraped " + str(recordsScraped))
-                    print("Scraped - "+title)
-                    print(company)
+                    # print("records scraped " + str(recordsScraped))
+                    print("Latest Scraped -  \n"+title)
+                    # print(company)
                     #print(link)
-                    print (location)
+                    # print (location)
+                    # print(timestamp)
                     print('----------------\n')
 
                 except Exception as e:
                     logging.warning('There is an Exception here!! TOP job section..')
-                    print('There is an Exception here!! Moving to DB-schema next page!!')
+                    print('There is an Exception here!! Moving to DB_schema.sql next page!!')
                     print(e)
                     pass
 
-                    # Got all jobs in given page lets check DB-schema if we got some duplicate
+                    # Got all jobs in given page lets check DB_schema.sql if we got some duplicate
             if(recordsScraped < RECORDS_TO_SCRAPE):
-                print("Scraped all lets goto next page")
+                print("Scraped all in this page lets goto next page")
                 # Moving to Next page as Requirement not satisfied
                 next_page_link = soup.find('a', href=True, text='Next')['href']
-                absoluteLink=getAbsoluteNextPageLink(keyword,next_page_link)
-                print('Got Next Page link - ' + str(absoluteLink))
-                driver.get(absoluteLink)
-                driver.save_screenshot('images/Next_click.png')
+                urlHistory=getAbsoluteNextPageLink(keyword,next_page_link)
+                print('Got Next Page link - ' + str(urlHistory))
+                driver.get(urlHistory)
+                driver.save_screenshot('images/Next_click'+str(randint(1,9))+'.png')
             #End of while loop
     except Exception as e:
-        logging.warning('There is an Exception here!! Next page and DB-schema page..')
+        logging.warning('There is an Exception here!! Next page and DB_schema.sql page..')
         print(e)
         print('Error')
         pass
-    driver.save_screenshot('images/job-list.png')
+    driver.save_screenshot('images/last-listing.png')
+    return recordsScraped
+
 
 
 
@@ -253,14 +302,17 @@ def searchForEnoughJobs(keyword,days):
 
 #
 #  Function to fetch for Job Description
-#  for Given number of link selected after DB-schema check
+#  for Given number of link selected after DB_schema.sql check
 #
 def fetchJobData():
     global driver
-    i=0
-    for completeData in jobDetailList:
+    totalPopped=0
+    totalData = len(jobDetailList)
+    index=0
+    while(index<totalData):
         try:
-            driver.get(completeData[0])
+            retryCounter = 0
+            driver.get(jobDetailList[index][0])
             soup = BeautifulSoup(driver.page_source, "html.parser")
             print('Started scraping Job posting!!')
             jobData =  soup.find("div", {"id": "JobDescription"})
@@ -277,39 +329,51 @@ def fetchJobData():
                             print('Search D failed')
                             jobData = soup.find("div", {"id": "CJT_jobBodyContent"})
                             if jobData is None:
-                                print('All Search failed for - '+completeData[0])
-                                jobDetailList.pop(i)
-                                continue;
-
-
-
-            fileName = str(completeData[1]).partition(' ')[0].replace('/','').replace('\\','')+str(randint(0,9999))+".txt"
-            completeData.append(fileName)
+                                print('Search E failed! ')
+                                jobData = soup.find("div", {"id": "jobcopy"})
+                                if jobData is None:
+                                    print('All Search failed for - ' + jobDetailList[index][0])
+                                    print('Popping')
+                                    print(jobDetailList.pop(index))
+                                    totalPopped=totalPopped+1
+                                    totalData=totalData-1
+                                    continue
+            fileName = str(uuid.uuid4())+".txt"
+            jobDetailList[index].append(fileName)
             print('Fetched filename!! Now saving to file ',fileName)
             if jobData is not None:
                 saveToTextFile(jobData.text,fileName)
                 print('Saved to file - '+fileName)
-                i = i + 1
             else:
-                jobDetailList.pop(i)
+                print("Why still job data is None.?")
                 pass
+            index = index + 1
         except Exception as e:
-            #jobDetailList.pop(i)
             logging.warning('Error parsing Job Description!!')
             print("Got an Exception - "+str(e))
-            print('RETRY..')
-            driver=getOrCreateDriver()
+            print('RETRY counter..'+str(retryCounter))
+            if(retryCounter<3):
+                retryCounter=retryCounter+1
+                driver=getOrCreateDriver()
+
+            else:
+                jobDetailList.pop(index)
+                totalPopped=totalPopped+1
+                continue
+
 
     print('\n\n\n\n')
+    print('Total popped - '+str(totalPopped))
+    return totalPopped
 
 
 
 
 
 
-
-
+#
 # Main function
+#
 if __name__ == "__main__":
 
     #Check if number of argument are two and exit if they are not
@@ -329,17 +393,23 @@ if __name__ == "__main__":
     db = MySqlDBFetcher()
     print('Phantomjs started')
 
+    recordsScraped=0
+    urlHistory=fetchUrl(keyword,timeline)
     #Searching for jobs in given page until number of Jobs required are fulfilled
-    searchForEnoughJobs(keyword,timeline)
-    print(jobDetailList)
-    print('Done scraping basic Job Data, now scraping Job Description!!')
+    while(recordsScraped<RECORDS_TO_SCRAPE):
+        recordsScraped=recordsScraped+searchForEnoughJobs(urlHistory,recordsScraped)
+        print('Done scraping basic! Total Scrraped - '+str(recordsScraped))
 
-    #Goto each job and fetch more details from that Job
-    fetchJobData()
-    print(jobDetailList)
-    #insert allnew records to DB
+    #Goto each job and fetch more details from each Job + check if some of them fails coz of DOM change
+        recordsSkipped=fetchJobData()
+        recordsScraped=recordsScraped-recordsSkipped
+        urlHistory=getNextAbsoluteUrl(urlHistory)
+
+        #insert all new records to DB
+
     db.fillDBwithDetails(jobDetailList)
 
     print("All scraping done total records scraped - "+str(len(jobDetailList)))
     print("Closing Phantomjs Driver")
+    del urlHistory
     driver.quit()
