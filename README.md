@@ -13,8 +13,7 @@
 ## HOW TO USE -  
 
 Script takes two input arguments - Search Keyword (i.e. - 'Java','Data Analyst') + Job post days (i.e. - 7 or 9)
-i.e. -
-*   Python MonsteJobsScraper 'Java' 7
+python MonsteJobsScraper 'keyword' 'days' i.e. - Python MonsteJobsScraper 'Java' 7
 
 ## Module details : 
 
